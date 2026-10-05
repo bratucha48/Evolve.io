@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover">
+<title>Evolve.io – Prototype</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#081018;font-family:Arial,sans-serif;color:#fff}
+  canvas{display:block;width:100vw;height:100vh}
+  #hud{position:fixed;top:18px;left:18px;background:rgba(5,10,18,.72);padding:12px 16px;border:1px solid rgba(255,255,255,.12);border-radius:12px;backdrop-filter:blur(8px);pointer-events:none}
+  #hud b{font-size:18px}
+  #help{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);padding:9px 14px;background:rgba(5,10,18,.7);border-radius:10px;color:#b9c6d6;font-size:13px;pointer-events:none}
+  #start{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle,#152a3d 0%,#060b12 70%)}
+  .card{width:min(420px,90vw);padding:30px;border-radius:20px;background:rgba(10,18,29,.94);border:1px solid rgba(255,255,255,.12);text-align:center;box-shadow:0 20px 80px #0008}
+  h1{margin:0 0 8px;font-size:42px;letter-spacing:-2px}
+  .sub{color:#9fb0c4;margin-bottom:24px}
+  button{border:0;border-radius:12px;padding:13px 24px;background:#38d996;color:#04110c;font-weight:800;font-size:16px;cursor:pointer}
+  button:hover{filter:brightness(1.08)}
+
+  #joystick{display:none;position:fixed;left:24px;bottom:28px;width:130px;height:130px;border-radius:50%;
+    background:rgba(255,255,255,.08);border:2px solid rgba(255,255,255,.18);touch-action:none;z-index:10}
+  #stick{position:absolute;left:50%;top:50%;width:58px;height:58px;margin:-29px;border-radius:50%;
+    background:rgba(57,217,150,.75);box-shadow:0 5px 20px #0008;pointer-events:none}
+  #boost{display:none;position:fixed;right:24px;bottom:40px;width:90px;height:90px;border-radius:50%;
+    border:2px solid rgba(255,255,255,.18);background:rgba(239,100,112,.72);color:#fff;font-weight:800;
+    touch-action:none;z-index:10}
+  @media (pointer:coarse){
+    #joystick,#boost{display:block}
+    #help{bottom:8px;font-size:11px;padding:6px 9px}
+    #hud{top:10px;left:10px;padding:9px 12px;font-size:13px}
+    #hud b{font-size:16px}
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud">
+  <b>Evolve.io</b><br>
+  Größe: <span id="size">12</span><br>
+  Punkte: <span id="score">0</span><br>
+  Platz: <span id="rank">1</span>
+</div>
+<div id="help">WASD / Pfeiltasten bewegen • Sammle Energie • Besiege kleinere Gegner</div>
+
+<div id="start">
+  <div class="card">
+    <h1>EVOLVE.IO</h1>
+    <div class="sub">Wachse. Entwickle dich. Überlebe.</div>
+    <p style="color:#c6d1dd;line-height:1.5">
+      Sammle Energiepartikel und werde größer. Andere Kreaturen bewegen sich ebenfalls über die Welt.
+    </p>
+    <button id="play">SPIEL STARTEN</button>
+  </div>
+</div>
+
+<script>
+const canvas=document.getElementById("game"),ctx=canvas.getContext("2d");
+let W,H,dpr=1,running=false;
+const world={w:4200,h:4200};
+const keys={};
+let cam={x:0,y:0}, score=0, particles=[], enemies=[], player;
+
+function resize(){
+  dpr=Math.min(devicePixelRatio||1,2);
+  W=innerWidth; H=innerHeight;
+  canvas.width=W*dpr; canvas.height=H*dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+addEventListener("resize",resize); resize();
+
+addEventListener("keydown",e=>{keys[e.key.toLowerCase()]=true});
+addEventListener("keyup",e=>{keys[e.key.toLowerCase()]=false});
+
+function rand(a,b){return Math.random()*(b-a)+a}
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
+function makeParticle(){
+  particles.push({x:rand(80,world.w-80),y:rand(80,world.h-80),r:rand(4,8),h:rand(0,360)});
+}
+function makeEnemy(i){
+  const r=rand(14,42);
+  enemies.push({
+    x:rand(150,world.w-150),y:rand(150,world.h-150),r,
+    speed:rand(55,105)/(1+r/45),
+    vx:0,vy:0,phase:rand(0,10),name:"Bot "+(i+1)
+  });
+}
+function reset(){
+  player={x:world.w/2,y:world.h/2,r:20,speed:235};
+  score=0; particles=[]; enemies=[];
+  for(let i=0;i<360;i++)makeParticle();
+  for(let i=0;i<18;i++)makeEnemy(i);
+  running=true;
+  document.getElementById("start").style.display="none";
+}
+
+function eatParticle(p){
+  const gain=Math.max(1,Math.round(p.r/2));
+  score+=gain;
+  player.r=Math.min(95,player.r+0.16);
+  p.x=rand(60,world.w-60); p.y=rand(60,world.h-60); p.r=rand(4,8); p.h=rand(0,360);
+}
+
+function update(dt){
+  let ax=0,ay=0;
+  if(keys["w"]||keys["arrowup"])ay-=1;
+  if(keys["s"]||keys["arrowdown"])ay+=1;
+  if(keys["a"]||keys["arrowleft"])ax-=1;
+  if(keys["d"]||keys["arrowright"])ax+=1;
+  const len=Math.hypot(ax,ay)||1;
+  const boost=keys["shift"]?1.35:1;
+  player.x+=(ax/len)*player.speed*boost*dt;
+  player.y+=(ay/len)*player.speed*boost*dt;
+  player.x=Math.max(player.r,Math.min(world.w-player.r,player.x));
+  player.y=Math.max(player.r,Math.min(world.h-player.r,player.y));
+
+  for(const p of particles){
+    if(dist(player,p)<player.r+p.r) eatParticle(p);
+  }
+
+  for(const e of enemies){
+    const d=dist(player,e);
+    e.phase+=dt;
+    // leichte KI: kleinere Bots meiden, größere verfolgen
+    let tx=Math.cos(e.phase*.55),ty=Math.sin(e.phase*.73);
+    if(d<650){
+      const dx=player.x-e.x,dy=player.y-e.y;
+      if(e.r<player.r*0.9){tx=-dx;ty=-dy}
+      else if(e.r>player.r*1.1){tx=dx;ty=dy}
+    }
+    const l=Math.hypot(tx,ty)||1;
+    e.x+=(tx/l)*e.speed*dt;
+    e.y+=(ty/l)*e.speed*dt;
+    e.x=Math.max(e.r,Math.min(world.w-e.r,e.x));
+    e.y=Math.max(e.r,Math.min(world.h-e.r,e.y));
+
+    if(dist(player,e)<player.r+e.r){
+      if(player.r>e.r*1.12){
+        player.r+=e.r*.18;
+        score+=Math.round(e.r*2);
+        e.x=rand(150,world.w-150); e.y=rand(150,world.h-150); e.r=rand(14,42);
+      }else if(e.r>player.r*1.12){
+        running=false;
+        document.getElementById("start").style.display="flex";
+        document.querySelector("#start h1").textContent="RUN VORBEI";
+        document.querySelector("#start .sub").textContent=`Du hast ${score} Punkte erreicht.`;
+        document.getElementById("play").textContent="NOCHMAL SPIELEN";
+      }
+    }
+  }
+
+  cam.x=player.x-W/2; cam.y=player.y-H/2;
+  cam.x=Math.max(0,Math.min(world.w-W,cam.x));
+  cam.y=Math.max(0,Math.min(world.h-H,cam.y));
+
+  document.getElementById("size").textContent=Math.round(player.r);
+  document.getElementById("score").textContent=score;
+  document.getElementById("rank").textContent=1+enemies.filter(e=>e.r>player.r).length;
+}
+
+function circle(x,y,r,fill,stroke){
+  ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fillStyle=fill;ctx.fill();
+  if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.stroke()}
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle="#071019";ctx.fillRect(0,0,W,H);
+
+  ctx.save();ctx.translate(-cam.x,-cam.y);
+
+  // Welt
+  ctx.fillStyle="#0b1821";ctx.fillRect(0,0,world.w,world.h);
+  ctx.strokeStyle="rgba(120,180,200,.055)";ctx.lineWidth=1;
+  const grid=100;
+  for(let x=0;x<=world.w;x+=grid){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,world.h);ctx.stroke()}
+  for(let y=0;y<=world.h;y+=grid){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(world.w,y);ctx.stroke()}
+  ctx.strokeStyle="rgba(80,220,170,.25)";ctx.lineWidth=5;ctx.strokeRect(0,0,world.w,world.h);
+
+  for(const p of particles){
+    const glow=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,p.r*3);
+    glow.addColorStop(0,`hsla(${p.h},90%,65%,.9)`);
+    glow.addColorStop(1,`hsla(${p.h},90%,55%,0)`);
+    ctx.fillStyle=glow;ctx.beginPath();ctx.arc(p.x,p.y,p.r*3,0,Math.PI*2);ctx.fill();
+    circle(p.x,p.y,p.r,`hsl(${p.h},85%,60%)`);
+  }
+
+  for(const e of enemies){
+    circle(e.x,e.y,e.r,"#ef6470","rgba(255,255,255,.25)");
+    circle(e.x-e.r*.28,e.y-e.r*.15,Math.max(2,e.r*.09),"#fff");
+    circle(e.x+e.r*.28,e.y-e.r*.15,Math.max(2,e.r*.09),"#fff");
+  }
+
+  circle(player.x,player.y,player.r,"#39d996","rgba(255,255,255,.55)");
+  circle(player.x-player.r*.28,player.y-player.r*.18,Math.max(2,player.r*.1),"#071019");
+  circle(player.x+player.r*.28,player.y-player.r*.18,Math.max(2,player.r*.1),"#071019");
+
+  ctx.restore();
+}
+
+let last=performance.now();
+function loop(now){
+  const dt=Math.min(.033,(now-last)/1000);last=now;
+  if(running)update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+document.getElementById("play").onclick=reset;
+requestAnimationFrame(loop);
+</script>
+
+<div id="joystick"><div id="stick"></div></div>
+<button id="boost">BOOST</button>
+
+<script>
+(function(){
+  const joy=document.getElementById("joystick"), stick=document.getElementById("stick"), boost=document.getElementById("boost");
+  let active=false, rect, max=42;
+  function setJoy(e){
+    const t=e.touches[0];
+    let dx=t.clientX-rect.cx, dy=t.clientY-rect.cy;
+    const d=Math.hypot(dx,dy)||1;
+    if(d>max){dx=dx/d*max;dy=dy/d*max}
+    stick.style.transform=`translate(${dx}px,${dy}px)`;
+    window.mobileJoy={x:dx/max,y:dy/max};
+  }
+  function start(e){e.preventDefault();active=true;rect=joy.getBoundingClientRect();rect.cx=rect.left+rect.width/2;rect.cy=rect.top+rect.height/2;setJoy(e)}
+  function move(e){if(active){e.preventDefault();setJoy(e)}}
+  function end(e){e.preventDefault();active=false;stick.style.transform="translate(0,0)";window.mobileJoy={x:0,y:0}}
+  joy.addEventListener("touchstart",start,{passive:false});
+  joy.addEventListener("touchmove",move,{passive:false});
+  joy.addEventListener("touchend",end,{passive:false});
+  boost.addEventListener("touchstart",e=>{e.preventDefault();keys["shift"]=true},{passive:false});
+  boost.addEventListener("touchend",e=>{e.preventDefault();keys["shift"]=false},{passive:false});
+  window.mobileJoy={x:0,y:0};
+
+  const oldUpdate=window.update;
+  // Patch input by injecting values into keys each animation frame.
+  setInterval(()=>{
+    if(window.mobileJoy){
+      keys["w"]=window.mobileJoy.y < -.18;
+      keys["s"]=window.mobileJoy.y > .18;
+      keys["a"]=window.mobileJoy.x < -.18;
+      keys["d"]=window.mobileJoy.x > .18;
+    }
+  },16);
+})();
+</script>
+</body>
+</html>
