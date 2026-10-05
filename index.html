@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Evolve.io – Foundation v0.1</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#071018}
+body{font-family:Arial,sans-serif}
+canvas{display:block;width:100%;height:100%;cursor:default}
+#info{
+  position:fixed;top:14px;left:14px;z-index:5;
+  padding:10px 14px;border-radius:10px;
+  color:#dce8ef;background:rgba(5,10,16,.78);
+  border:1px solid rgba(120,160,180,.25);
+  font-size:13px;pointer-events:none
+}
+
+.hotbar{
+  position:fixed;
+  left:50%;
+  bottom:22px;
+  transform:translateX(-50%);
+  display:flex;
+  gap:7px;
+  padding:8px;
+  background:rgba(20,25,22,.82);
+  border:2px solid rgba(255,255,255,.16);
+  border-radius:12px;
+  box-shadow:0 8px 25px rgba(0,0,0,.35);
+  z-index:20;
+  user-select:none;
+}
+.slot{
+  position:relative;
+  width:58px;
+  height:58px;
+  border:2px solid rgba(255,255,255,.18);
+  border-radius:8px;
+  background:rgba(70,78,70,.72);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:30px;
+  cursor:pointer;
+  transition:.12s;
+}
+.slot:hover{background:rgba(100,110,98,.85);transform:translateY(-2px)}
+.slot.active{
+  border-color:#f4d35e;
+  box-shadow:0 0 0 2px rgba(244,211,94,.25),0 0 14px rgba(244,211,94,.25);
+}
+.slot .num{
+  position:absolute;
+  left:5px;
+  top:3px;
+  font:700 12px Arial,sans-serif;
+  color:#fff;
+  text-shadow:0 1px 3px #000;
+}
+.slot .name{
+  position:absolute;
+  bottom:2px;
+  left:0;
+  right:0;
+  text-align:center;
+  font:700 9px Arial,sans-serif;
+  color:#eee;
+  text-shadow:0 1px 3px #000;
+}
+
+
+.combat-hint{
+  position:fixed;
+  left:50%;
+  bottom:4px;
+  transform:translateX(-50%);
+  color:rgba(255,255,255,.7);
+  font:12px Arial,sans-serif;
+  text-shadow:0 1px 3px #000;
+  z-index:20;
+  pointer-events:none;
+}
+
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="info">Grüne Fantasy-Wiese · WASD / Pfeiltasten = Bewegen</div>
+
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+
+let W=innerWidth,H=innerHeight,dpr=Math.min(devicePixelRatio||1,2);
+function resize(){
+  W=innerWidth; H=innerHeight;
+  canvas.width=W*dpr; canvas.height=H*dpr;
+  canvas.style.width=W+"px"; canvas.style.height=H+"px";
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+addEventListener("resize",resize);
+resize();
+
+const world={w:4200,h:4200};
+const keys={};
+
+addEventListener("keydown",e=>{
+  const k=e.key.toLowerCase();
+  keys[k]=true;
+  if(["w","a","s","d","arrowup","arrowdown","arrowleft","arrowright"].includes(k)){
+    e.preventDefault();
+  }
+});
+addEventListener("keyup",e=>{
+  keys[e.key.toLowerCase()]=false;
+});
+
+const player={
+  x:world.w/2,
+  y:world.h/2,
+  speed:260,
+  r:24,
+  walk:0,
+  dirX:1,
+  dirY:0
+};
+
+// Landschaft: feste dekorative Objekte, damit sie beim Bewegen stabil bleiben.
+const scenery=[];
+let seed=73192;
+function rnd(){
+  seed=(seed*1664525+1013904223)>>>0;
+  return seed/4294967296;
+}
+function buildScenery(){
+  scenery.length=0;
+  for(let i=0;i<260;i++){
+    const type=rnd()<.68?"tree":(rnd()<.55?"bush":"rock");
+    scenery.push({
+      type,
+      x:120+rnd()*(world.w-240),
+      y:120+rnd()*(world.h-240),
+      s:.7+rnd()*1.15,
+      rot:rnd()*Math.PI*2
+    });
+  }
+  // Kleine Lichtungen: keine Deko direkt am Startpunkt.
+  for(const o of scenery){
+    if(Math.hypot(o.x-world.w/2,o.y-world.h/2)<300){
+      o.x+=420;
+      o.y+=260;
+    }
+  }
+}
+buildScenery();
+
+
+function input(){
+  let x=0,y=0;
+  if(keys["w"]||keys["arrowup"])y-=1;
+  if(keys["s"]||keys["arrowdown"])y+=1;
+  if(keys["a"]||keys["arrowleft"])x-=1;
+  if(keys["d"]||keys["arrowright"])x+=1;
+
+  const len=Math.hypot(x,y);
+  if(len>0){x/=len;y/=len}
+  return {x,y,len};
+}
+
+
+const items = {
+  sword: {name:"Schwert", type:"sword"},
+  axe: {name:"Axt", type:"axe"},
+  hammer: {name:"Hammer", type:"hammer"}
+};
+let selectedSlot=1;
+let heldItem="sword";
+
+function selectSlot(n){
+  selectedSlot=n;
+  const slot=document.querySelector(`.slot[data-slot="${n}"]`);
+  heldItem=slot?.dataset.item || null;
+  document.querySelectorAll(".slot").forEach(s=>s.classList.remove("active"));
+  slot?.classList.add("active");
+}
+
+document.querySelectorAll(".slot").forEach(slot=>{
+  slot.addEventListener("click",()=>selectSlot(Number(slot.dataset.slot)));
+});
+
+addEventListener("keydown",e=>{
+  const n=Number(e.key);
+  if(n>=1 && n<=9){
+    selectSlot(n);
+    e.preventDefault();
+  }
+});
+
+
+let attacking=false;
+let attackTime=0;
+let attackDuration=.20;
+let attackCooldown=0;
+
+const weaponStats={
+  sword:{range:72, damage:20, cooldown:.32, arc:Math.PI*.72},
+  axe:{range:82, damage:34, cooldown:.62, arc:Math.PI*.58},
+  hammer:{range:62, damage:45, cooldown:.85, arc:Math.PI*.48}
+};
+
+function startAttack(){
+  if(!heldItem || !weaponStats[heldItem] || attackCooldown>0) return;
+  attacking=true;
+  attackTime=0;
+  const st=weaponStats[heldItem];
+  attackDuration=heldItem==="sword"?.20:heldItem==="axe"?.30:.36;
+  attackCooldown=st.cooldown;
+}
+
+addEventListener("mousedown",e=>{
+  if(e.button===0) startAttack();
+});
+
+addEventListener("keydown",e=>{
+  if(e.code==="Space"){
+    e.preventDefault();
+    startAttack();
+  }
+});
+
+function update(dt){
+  if(attackCooldown>0) attackCooldown=Math.max(0,attackCooldown-dt);
+  if(attacking){
+    attackTime+=dt;
+    if(attackTime>=attackDuration){
+      attacking=false;
+    }
+  }
+  const v=input();
+
+  player.x+=v.x*player.speed*dt;
+  player.y+=v.y*player.speed*dt;
+
+  // Weltgrenzen
+  player.x=Math.max(player.r,Math.min(world.w-player.r,player.x));
+  player.y=Math.max(player.r,Math.min(world.h-player.r,player.y));
+
+  if(v.len>0){
+    player.walk+=dt*9;
+    player.dirX=v.x;
+    player.dirY=v.y;
+  }
+}
+
+function drawWorld(camX,camY){
+  // Grundfläche
+  ctx.fillStyle="#5e9b52";
+  ctx.fillRect(0,0,W,H);
+
+  // weiche Grasflächen
+  ctx.fillStyle="rgba(104,166,82,.35)";
+  ctx.fillRect(0,0,W,H);
+
+  // dezente Gelände-Flecken
+  const cell=180;
+  for(let gx=Math.floor(camX/cell)*cell;gx<camX+W+cell;gx+=cell){
+    for(let gy=Math.floor(camY/cell)*cell;gy<camY+H+cell;gy+=cell){
+      const n=Math.sin(gx*.013+gy*.017)*.5+.5;
+      ctx.fillStyle=n>.62?"rgba(126,177,83,.10)":"rgba(50,111,57,.06)";
+      ctx.beginPath();
+      ctx.ellipse(gx-camX+70,gy-camY+65,95,55,0,0,Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  // kleine Wege
+  ctx.strokeStyle="rgba(198,171,108,.22)";
+  ctx.lineWidth=34;
+  ctx.lineCap="round";
+  ctx.beginPath();
+  ctx.moveTo(-100-camX,world.h*.62-camY);
+  ctx.quadraticCurveTo(world.w*.38-camX,world.h*.48-camY,world.w+100-camX,world.h*.58-camY);
+  ctx.stroke();
+
+  // Gras-Striche
+  ctx.strokeStyle="rgba(40,103,45,.35)";
+  ctx.lineWidth=2;
+  for(let i=0;i<140;i++){
+    const x=((i*347)%world.w)-camX;
+    const y=((i*593)%world.h)-camY;
+    if(x>-10&&x<W+10&&y>-10&&y<H+10){
+      ctx.beginPath();
+      ctx.moveTo(x,y+4);
+      ctx.lineTo(x-2,y-5);
+      ctx.moveTo(x+3,y+4);
+      ctx.lineTo(x+5,y-4);
+      ctx.stroke();
+    }
+  }
+
+  // Dekoration
+  for(const o of scenery){
+    const x=o.x-camX,y=o.y-camY;
+    if(x<-80||x>W+80||y<-100||y>H+100)continue;
+    ctx.save();
+    ctx.translate(x,y);
+    ctx.rotate(o.rot);
+    const s=o.s;
+
+    if(o.type==="tree"){
+      // Schatten
+      ctx.fillStyle="rgba(0,0,0,.18)";
+      ctx.beginPath();ctx.ellipse(0,18*s,27*s,10*s,0,0,Math.PI*2);ctx.fill();
+      // Stamm
+      ctx.fillStyle="#68452d";
+      ctx.fillRect(-7*s,-4*s,14*s,38*s);
+      // Krone
+      ctx.fillStyle="#326b3b";
+      ctx.beginPath();ctx.arc(-12*s,-12*s,22*s,0,Math.PI*2);ctx.arc(10*s,-16*s,25*s,0,Math.PI*2);ctx.arc(0,-32*s,24*s,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle="#4e8d49";
+      ctx.beginPath();ctx.arc(-6*s,-27*s,13*s,0,Math.PI*2);ctx.arc(15*s,-13*s,11*s,0,Math.PI*2);ctx.fill();
+    } else if(o.type==="bush"){
+      ctx.fillStyle="rgba(0,0,0,.15)";
+      ctx.beginPath();ctx.ellipse(0,8*s,25*s,8*s,0,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle="#3e7d3f";
+      ctx.beginPath();ctx.arc(-14*s,0,15*s,0,Math.PI*2);ctx.arc(0,-7*s,19*s,0,Math.PI*2);ctx.arc(15*s,1,14*s,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle="#78ad55";
+      ctx.beginPath();ctx.arc(-4*s,-10*s,5*s,0,Math.PI*2);ctx.fill();
+    } else {
+      ctx.fillStyle="rgba(0,0,0,.16)";
+      ctx.beginPath();ctx.ellipse(0,9*s,22*s,7*s,0,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle="#77847b";
+      ctx.beginPath();ctx.ellipse(0,0,19*s,14*s,.2,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle="#98a59a";
+      ctx.beginPath();ctx.ellipse(-5*s,-4*s,9*s,6*s,.1,0,Math.PI*2);ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Welt-Rand
+  ctx.strokeStyle="rgba(38,83,43,.75)";
+  ctx.lineWidth=7;
+  ctx.strokeRect(-camX,-camY,world.w,world.h);
+}
+
+
+function drawHeldWeapon(){
+  if(!heldItem) return;
+
+  const moving = Math.abs(player.dirX)+Math.abs(player.dirY)>0;
+  const bob = moving ? Math.sin(player.walk*10)*2 : 0;
+  const st=weaponStats[heldItem];
+
+  ctx.save();
+  ctx.translate(player.dirX*24, player.dirY*24+bob);
+
+  let angle = Math.atan2(player.dirY,player.dirX);
+
+  // Angriff: Waffe schwingt in einem Bogen nach vorne.
+  if(attacking){
+    const p=Math.min(1,attackTime/attackDuration);
+    const swing=Math.sin(p*Math.PI);
+    const side=(p<.5 ? -1 : 1);
+    angle += side * (st.arc*.55) * (1-swing*.35);
+  }
+
+  ctx.rotate(angle);
+
+  // Treffer-/Schwung-Effekt
+  if(attacking){
+    const p=Math.min(1,attackTime/attackDuration);
+    ctx.globalAlpha=.30*(1-p);
+    ctx.strokeStyle="#fff4b0";
+    ctx.lineWidth=8;
+    ctx.beginPath();
+    ctx.arc(4,0,st.range*.72,-st.arc*.5,st.arc*.5);
+    ctx.stroke();
+    ctx.globalAlpha=1;
+  }
+
+  if(heldItem==="sword"){
+    ctx.strokeStyle="#d9e1e6";
+    ctx.lineWidth=6;
+    ctx.lineCap="round";
+    ctx.beginPath();ctx.moveTo(3,0);ctx.lineTo(38,0);ctx.stroke();
+    ctx.strokeStyle="#8a633e";
+    ctx.lineWidth=5;
+    ctx.beginPath();ctx.moveTo(0,-7);ctx.lineTo(0,7);ctx.stroke();
+    ctx.strokeStyle="#d4a94e";
+    ctx.lineWidth=3;
+    ctx.beginPath();ctx.moveTo(-4,0);ctx.lineTo(4,0);ctx.stroke();
+  } else if(heldItem==="axe"){
+    ctx.strokeStyle="#714b31";
+    ctx.lineWidth=6;
+    ctx.beginPath();ctx.moveTo(2,0);ctx.lineTo(32,0);ctx.stroke();
+    ctx.fillStyle="#b9c4c7";
+    ctx.beginPath();
+    ctx.moveTo(25,-13);ctx.quadraticCurveTo(39,-8,36,2);
+    ctx.quadraticCurveTo(32,12,25,13);
+    ctx.lineTo(28,2);ctx.lineTo(28,-2);ctx.closePath();
+    ctx.fill();
+  } else if(heldItem==="hammer"){
+    ctx.strokeStyle="#714b31";
+    ctx.lineWidth=6;
+    ctx.beginPath();ctx.moveTo(2,0);ctx.lineTo(32,0);ctx.stroke();
+    ctx.fillStyle="#69747a";
+    ctx.beginPath();
+    ctx.roundRect(25,-10,20,20,4);
+    ctx.fill();
+    ctx.fillStyle="#89949a";
+    ctx.fillRect(28,-7,14,4);
+  }
+  ctx.restore();
+}
+
+
+function drawHuman(){
+  const camX=Math.max(0,Math.min(world.w-W,player.x-W/2));
+  const camY=Math.max(0,Math.min(world.h-H,player.y-H/2));
+
+  const x=player.x-camX;
+  const y=player.y-camY;
+  const moving=input().len>0;
+  const step=moving?Math.sin(player.walk)*4:0;
+
+  const angle=Math.atan2(player.dirY,player.dirX);
+  const cos=Math.cos(angle), sin=Math.sin(angle);
+
+  ctx.save();
+  ctx.translate(x,y);
+
+  // Schatten
+  ctx.fillStyle="rgba(0,0,0,.38)";
+  ctx.beginPath();
+  ctx.ellipse(0,22,29,10,0,0,Math.PI*2);
+  ctx.fill();
+
+  // Körperbewegung beim Laufen
+  ctx.translate(0,moving?Math.abs(Math.sin(player.walk))*1.2:0);
+
+  // Beine
+  ctx.strokeStyle="#202936";
+  ctx.lineWidth=8;
+  ctx.lineCap="round";
+  ctx.beginPath();
+  ctx.moveTo(-8,9);
+  ctx.lineTo(-9+step,31);
+  ctx.moveTo(8,9);
+  ctx.lineTo(9-step,31);
+  ctx.stroke();
+
+  // Schuhe
+  ctx.strokeStyle="#111820";
+  ctx.lineWidth=7;
+  ctx.beginPath();
+  ctx.moveTo(-9+step,31);
+  ctx.lineTo(-15+step,34);
+  ctx.moveTo(9-step,31);
+  ctx.lineTo(15-step,34);
+  ctx.stroke();
+
+  // Körper
+  ctx.fillStyle="#3f6f91";
+  ctx.beginPath();
+  ctx.roundRect(-18,-10,36,38,9);
+  ctx.fill();
+
+  // Jackenstreifen
+  ctx.strokeStyle="#83b5d1";
+  ctx.lineWidth=3;
+  ctx.beginPath();
+  ctx.moveTo(0,-7);
+  ctx.lineTo(0,22);
+  ctx.stroke();
+
+  // Arme – bewegen leicht mit
+  ctx.strokeStyle="#d3a17b";
+  ctx.lineWidth=7;
+  ctx.beginPath();
+  ctx.moveTo(-16,-3);
+  ctx.lineTo(-28-step*.7,15+step*.25);
+  ctx.moveTo(16,-3);
+  ctx.lineTo(28+step*.7,15-step*.25);
+  ctx.stroke();
+
+  // Kopf
+  ctx.fillStyle="#d9aa82";
+  ctx.beginPath();
+  ctx.arc(0,-24,15,0,Math.PI*2);
+  ctx.fill();
+
+  // Haare
+  ctx.fillStyle="#49301f";
+  ctx.beginPath();
+  ctx.arc(0,-29,15,Math.PI,Math.PI*2);
+  ctx.fill();
+
+  // Gesicht zeigt in Bewegungsrichtung
+  ctx.save();
+  ctx.translate(cos*3,sin*3);
+  ctx.fillStyle="#17212a";
+  ctx.beginPath();
+  ctx.arc(-5,-23,1.8,0,Math.PI*2);
+  ctx.arc(5,-23,1.8,0,Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+
+  // Kleine Richtungshilfe: dezenter Kragen
+  ctx.fillStyle="#d9e7ef";
+  ctx.beginPath();
+  ctx.arc(0,-10,4,0,Math.PI*2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+  drawHeldWeapon();
+
+function draw(){
+  const camX=Math.max(0,Math.min(world.w-W,player.x-W/2));
+  const camY=Math.max(0,Math.min(world.h-H,player.y-H/2));
+
+  drawWorld(camX,camY);
+  drawHuman();
+}
+
+let last=performance.now();
+function loop(now){
+  const dt=Math.min((now-last)/1000,.033);
+  last=now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+
+<div class="hotbar" id="hotbar">
+  <div class="slot active" data-slot="1" data-item="sword"><span class="num">1</span>⚔️<span class="name">Schwert</span></div>
+  <div class="slot" data-slot="2" data-item="axe"><span class="num">2</span>🪓<span class="name">Axt</span></div>
+  <div class="slot" data-slot="3" data-item="hammer"><span class="num">3</span>🔨<span class="name">Hammer</span></div>
+  <div class="slot" data-slot="4"><span class="num">4</span></div>
+  <div class="slot" data-slot="5"><span class="num">5</span></div>
+  <div class="slot" data-slot="6"><span class="num">6</span></div>
+  <div class="slot" data-slot="7"><span class="num">7</span></div>
+  <div class="slot" data-slot="8"><span class="num">8</span></div>
+  <div class="slot" data-slot="9"><span class="num">9</span></div>
+</div>
+
+
+<div class="combat-hint">🖱️ Linksklick / Leertaste = Angriff</div>
+
+</body>
+</html>
